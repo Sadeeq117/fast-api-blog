@@ -1,126 +1,179 @@
-from fastapi import FastAPI, Request, HTTPException, status
+from typing import Annotated
+
+from fastapi import FastAPI, Request, HTTPException, status, Depends
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse,JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
+import models
+from database import Base, get_db, engine
+from schemas import PostCreate, PostResponse, UserCreate, UserResponse
 
+# To Create all the Table in DB.
+Base.metadata.create_all(bind=engine)
 
 # To make serve up and running.
 app = FastAPI()
 
 app.mount("/static", StaticFiles(directory="static"), name= "static")
+app.mount("/media", StaticFiles(directory="media"), name="media")
+
 templates = Jinja2Templates(directory="templates")
 
-# Dummy Data to show in UI
-posts: list[dict] = [
-    {
-        "id": 1,
-        "author": "Sadeeq Shaik",
-        "title": "Getting Started with FastAPI",
-        "content": "FastAPI allows you to build APIs quickly with automatic validation and async support.",
-        "date_posted": "April 20, 2025",
-    },
-    {
-        "id": 2,
-        "author": "Sadeeq Shaik",
-        "title": "Understanding Async in Python",
-        "content": "Async programming helps handle multiple requests efficiently without blocking execution.",
-        "date_posted": "April 21, 2025",
-    },
-    {
-        "id": 3,
-        "author": "Sadeeq Shaik",
-        "title": "Why Pydantic Matters",
-        "content": "Pydantic ensures data validation and serialization, making APIs more reliable.",
-        "date_posted": "April 22, 2025",
-    },
-    {
-        "id": 4,
-        "author": "Sadeeq Shaik",
-        "title": "Building REST APIs with FastAPI",
-        "content": "FastAPI simplifies REST API development with automatic docs and type hints.",
-        "date_posted": "April 23, 2025",
-    },
-    {
-        "id": 5,
-        "author": "Sadeeq Shaik",
-        "title": "Dependency Injection in FastAPI",
-        "content": "Dependency injection helps manage shared logic like database connections efficiently.",
-        "date_posted": "April 24, 2025",
-    },
-    {
-        "id": 6,
-        "author": "Sadeeq Shaik",
-        "title": "Working with SQLAlchemy",
-        "content": "SQLAlchemy helps interact with databases using Python objects instead of raw SQL.",
-        "date_posted": "April 25, 2025",
-    },
-    {
-        "id": 7,
-        "author": "Sadeeq Shaik",
-        "title": "Handling Authentication with JWT",
-        "content": "JWT tokens are commonly used for securing APIs and managing user sessions.",
-        "date_posted": "April 26, 2025",
-    },
-    {
-        "id": 8,
-        "author": "Sadeeq Shaik",
-        "title": "API Versioning Best Practices",
-        "content": "Versioning ensures backward compatibility and smooth API evolution.",
-        "date_posted": "April 27, 2025",
-    },
-    {
-        "id": 9,
-        "author": "Sadeeq Shaik",
-        "title": "Pagination and Filtering",
-        "content": "Pagination improves performance by limiting data, and filtering refines results.",
-        "date_posted": "April 28, 2025",
-    },
-    {
-        "id": 10,
-        "author": "Sadeeq Shaik",
-        "title": "Deploying FastAPI Applications",
-        "content": "Deploy FastAPI apps using Uvicorn, Docker, and cloud platforms for scalability.",
-        "date_posted": "April 29, 2025",
-    },
-]
 
+# -------------------------------------- Template Loading -------------------------------------#
 
-
-@app.get("/favicon.ico", include_in_schema=False)
-async def favicon():
-    return FileResponse("static/icons/favicon.ico")
-
-
-@app.get("/",  include_in_schema=False, name="home")
+@app.get("/", include_in_schema=False, name="home")
 @app.get("/posts", include_in_schema=False, name="posts")
-def home(request : Request):
-    return templates.TemplateResponse(request, "home.html", {"title": "Home" ,"posts" : posts})
+def home(request: Request, db: Annotated[Session, Depends(get_db)]):
+    result = db.execute(select(models.Post))
+    posts = result.scalars().all()
+    return templates.TemplateResponse(
+        request,
+        "home.html",
+        {"posts": posts, "title": "Home"},
+    )
 
-@app.get('/posts/{post_id}', include_in_schema=False)
-def posts_page(request: Request, post_id : int):
-    for post in posts:
-        if post['id'] == post_id:
-            title = post['title'][:50]
-            return templates.TemplateResponse(request, "post.html", {"title": title ,"post" : post})
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post Not found.")
+@app.get("/posts/{post_id}", include_in_schema=False)
+def post_page(request: Request, post_id: int, db: Annotated[Session, Depends(get_db)]):
+    result = db.execute(select(models.Post).where(models.Post.id == post_id))
+    post = result.scalars().first()
+    if post:
+        title = post.title[:50]
+        return templates.TemplateResponse(
+            request,
+            "post.html",
+            {"post": post, "title": title},
+        )
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
+
+@app.get("/users/{user_id}/posts", include_in_schema=False, name="user_posts")
+def user_posts_page(
+    request: Request,
+    user_id: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    result = db.execute(select(models.User).where(models.User.id == user_id))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    result = db.execute(select(models.Post).where(models.Post.user_id == user_id))
+    posts = result.scalars().all()
+    return templates.TemplateResponse(
+        request,
+        "user_posts.html",
+        {"posts": posts, "user": user, "title": f"{user.username}'s Posts"},
+    )
+# --------------------------------------- Template Loading -----------------------------------------#
 
 
 
-@app.get('/api/posts', include_in_schema=True)
-def get_posts():
+
+
+#------------------------------------------- For Post Related Backend Routes ------------------------------------------#
+@app.get("/api/posts", response_model=list[PostResponse])
+def get_posts(db: Annotated[Session, Depends(get_db)]):
+    result = db.execute(select(models.Post))
+    posts = result.scalars().all()
     return posts
 
+@app.post("/api/posts", response_model=PostResponse, status_code=status.HTTP_201_CREATED)
+def create_post(post: PostCreate, db: Annotated[Session, Depends(get_db)]):
+    result = db.execute(select(models.User).where(models.User.id == post.user_id))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    new_post = models.Post(
+        title=post.title,
+        content=post.content,
+        user_id=post.user_id,
+    )
+    db.add(new_post)
+    db.commit()
+    db.refresh(new_post)
+    return new_post
 
-@app.get('/api/posts/{post_id}', include_in_schema=True)
-def get_posts(post_id : int):
-    for post in posts:
-        if post['id'] == post_id:
-            return post
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post Not found.")
+@app.get("/api/posts/{post_id}", response_model=PostResponse)
+def get_post(post_id: int, db: Annotated[Session, Depends(get_db)]):
+    result = db.execute(select(models.Post).where(models.Post.id == post_id))
+    post = result.scalars().first()
+    if post:
+        return post
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Post not found")
 
+#------------------------------------------- For Post Related Backend Routes ------------------------------------------#
+
+
+
+#------------------------------------------- For User Related Backend Routes ------------------------------------------#
+@app.post("/api/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+def create_user(user: UserCreate, db: Annotated[Session, Depends(get_db)]):
+    result = db.execute(
+        select(models.User).where(models.User.username == user.username),
+    )
+    existing_user = result.scalars().first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username already exists",
+        )
+    result = db.execute(
+        select(models.User).where(models.User.email == user.email),
+    )
+    existing_email = result.scalars().first()
+    if existing_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered",
+        )
+    new_user = models.User(
+        username=user.username,
+        email=user.email,
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
+@app.get('/api/users/{user_id}', response_model=UserResponse)
+def get_users(user_id : int, db: Annotated[Session, Depends(get_db)]):
+    result = db.execute(
+        select(models.User).where(models.User.id == user_id),
+    )
+    user = result.scalars().first()
+    
+    if user:
+        return user
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User Not found.") 
+
+@app.get("/api/users/{user_id}/posts", response_model=list[PostResponse])
+def get_user_posts(user_id: int, db: Annotated[Session, Depends(get_db)]):
+    result = db.execute(select(models.User).where(models.User.id == user_id))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    result = db.execute(select(models.Post).where(models.Post.user_id == user_id))
+    posts = result.scalars().all()
+    return posts
+
+#------------------------------------------- For User Related Backend Routes ------------------------------------------#
+
+
+
+# ------------------------------------------ Error handing ------------------------------------------------#
 @app.exception_handler(StarletteHTTPException)
 def general_http_exception_handler(request: Request, exception: StarletteHTTPException):
     message = (
@@ -146,7 +199,6 @@ def general_http_exception_handler(request: Request, exception: StarletteHTTPExc
         status_code=exception.status_code,
     )
 
-
 @app.exception_handler(RequestValidationError)
 def validation_exception_handler(request: Request, exception: RequestValidationError):
     if request.url.path.startswith("/api"):
@@ -165,4 +217,4 @@ def validation_exception_handler(request: Request, exception: RequestValidationE
         },
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
     )       
-
+# ------------------------------------------ Error handing ------------------------------------------------#
