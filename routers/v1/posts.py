@@ -7,7 +7,7 @@ from sqlalchemy.orm import selectinload
 
 import models
 from database import get_db
-from schemas import PostCreate, PostResponse, PostUpdate
+from schemas.posts import PostCreate, PostResponse, PostUpdate
 from auth import CurrentUser
 
 router = APIRouter()

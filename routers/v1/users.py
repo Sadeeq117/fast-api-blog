@@ -9,7 +9,8 @@ from sqlalchemy.orm import selectinload
 
 import models
 from database import get_db
-from schemas import PostResponse, UserCreate, UserPublic, UserPrivate, Token, UserUpdate
+from schemas.posts import PostResponse
+from schemas.users import   UserCreate, UserPublic, UserPrivate, Token, UserUpdate
 from auth import (
     CurrentUser,
     create_access_token,
